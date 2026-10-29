@@ -1,12 +1,15 @@
 {
   "name": "watchparty-server",
-  "version": "1.0.0",
-  "description": "Serveur de signalisation pour l'extension WatchParty",
+  "version": "1.2.0",
+  "description": "Serveur WebSocket WatchParty v1.2 (salons, chat, synchronisation Netflix)",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
   },
+  "engines": {
+    "node": ">=18"
+  },
   "dependencies": {
-    "ws": "^8.16.0"
+    "ws": "^8.18.0"
   }
 }
