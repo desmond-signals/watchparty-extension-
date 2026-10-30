@@ -1,6 +1,5 @@
-/* WatchParty v1.2 — server.js (Node.js + ws)
- * À pousser à la racine du dépôt GitHub relié à Render (avec package.json).
- * wss://watchparty-sn9a.onrender.com — écoute sur process.env.PORT || 8080
+/* WatchParty v1.3 — server.js (Node.js + ws)
+ * Support multi-plateforme (Netflix, YouTube, Prime, Disney, Crunchyroll, ADN)
  */
 'use strict';
 
@@ -10,24 +9,23 @@ const { WebSocketServer } = require('ws');
 
 const PORT = process.env.PORT || 8080;
 const MAX_PER_ROOM = 10;
-const GRACE_MS = 90 * 1000; // un client déconnecté garde sa place 90 s
+const GRACE_MS = 90 * 1000;
 
 const rooms = new Map();
 
 const server = http.createServer((req, res) => {
   res.writeHead(200, { 'Content-Type': 'text/plain; charset=utf-8', 'Access-Control-Allow-Origin': '*' });
-  res.end('WatchParty OK - salons actifs : ' + rooms.size);
+  res.end('WatchParty v1.3 OK - salons actifs : ' + rooms.size);
 });
 const wss = new WebSocketServer({ server, maxPayload: 16 * 1024 });
 
-// ---------------------------------------------------------------- utilitaires
 const now = () => Date.now();
 const uid = () => crypto.randomBytes(6).toString('hex');
 const ID_RE = /^[0-9a-f]{12}$/;
 
 function send(ws, obj) {
   if (ws && ws.readyState === 1) {
-    try { ws.send(JSON.stringify(obj)); } catch (e) { /* ignore */ }
+    try { ws.send(JSON.stringify(obj)); } catch (e) {}
   }
 }
 
@@ -58,7 +56,6 @@ function participantsOf(room) {
   }));
 }
 
-// Film actif avec la position ESTIMÉE à l'instant présent
 function movieNow(room) {
   const m = room.movie;
   if (!m) return null;
@@ -151,7 +148,6 @@ function detach(ws) {
   if (ctx) removeClient(ctx.room, ctx.client, 'left');
 }
 
-// ---------------------------------------------------------------- handlers
 function onCreate(ws, msg) {
   detach(ws);
   const code = genCode();
@@ -179,8 +175,6 @@ function onJoin(ws, msg) {
   addChat(room, { system: true, text: client.name + ' a rejoint le salon' });
 }
 
-// Reconnexion (changement de page, coupure réseau, redémarrage de Render).
-// Si le salon n'existe plus (serveur redémarré), on le RECRÉE avec le même code.
 function onRejoin(ws, msg) {
   const code = String(msg.code || '').trim();
   if (!/^\d{4}$/.test(code)) {
@@ -205,7 +199,7 @@ function onRejoin(ws, msg) {
     if (client.ws && client.ws !== ws) {
       const old = client.ws;
       old.ctx = null;
-      try { old.close(); } catch (e) { /* ignore */ }
+      try { old.close(); } catch (e) {}
     }
     client.ws = ws;
     if (msg.name) client.name = cleanName(msg.name);
@@ -227,7 +221,6 @@ function onRejoin(ws, msg) {
     return;
   }
 
-  // Salon restauré : l'ancien hôte, quand il revient, reprend son rôle
   let hostChanged = false;
   if (room.restored && !room.hostClaimed && msg.wasHost && client.id !== room.hostId) {
     room.hostId = client.id;
@@ -288,11 +281,13 @@ function handle(ws, msg) {
       break;
     }
 
-    case 'movie': { // hôte uniquement
+    case 'movie': {
       if (room.hostId !== client.id) break;
-      const videoId = String(msg.videoId || '');
-      if (!/^\d{4,12}$/.test(videoId)) break;
+      const videoId = String(msg.videoId || '').trim();
+      if (!videoId) break;
       const title = String(msg.title || '').trim().slice(0, 120);
+      const mediaUrl = String(msg.url || '').trim();
+
       if (room.movie && room.movie.videoId === videoId) {
         if (title && title !== room.movie.title) {
           room.movie.title = title;
@@ -302,7 +297,7 @@ function handle(ws, msg) {
       }
       room.movie = {
         videoId: videoId,
-        url: 'https://www.netflix.com/watch/' + videoId, // URL reconstruite côté serveur
+        url: mediaUrl || videoId,
         title: title,
         time: Math.max(0, Number(msg.time) || 0),
         playing: typeof msg.playing === 'boolean' ? msg.playing : true,
@@ -311,7 +306,7 @@ function handle(ws, msg) {
       broadcast(room, { type: 'movie', changed: true, movie: movieNow(room) });
       addChat(room, {
         system: true,
-        text: title ? client.name + ' a lancé « ' + title + ' »' : client.name + ' a lancé un film'
+        text: title ? client.name + ' a lancé « ' + title + ' »' : client.name + ' a lancé un média'
       });
       break;
     }
@@ -338,7 +333,7 @@ function handle(ws, msg) {
       break;
     }
 
-    case 'heartbeat': { // hôte uniquement : sa position sert de référence
+    case 'heartbeat': {
       const m = room.movie;
       if (room.hostId !== client.id || !m || String(msg.videoId) !== m.videoId) break;
       m.time = Math.max(0, Number(msg.time) || 0);
@@ -348,14 +343,14 @@ function handle(ws, msg) {
       break;
     }
 
-    case 'resync': { // un invité demande la position actuelle de l'hôte
+    case 'resync': {
       const mv = movieNow(room);
       if (!mv) break;
-      send(ws, { type: 'resync', movie: { videoId: mv.videoId, time: mv.time, playing: mv.playing }, by: { name: mv.hostName } });
+      send(ws, { type: 'resync', movie: { videoId: mv.videoId, url: mv.url, time: mv.time, playing: mv.playing }, by: { name: mv.hostName } });
       break;
     }
 
-    case 'force_sync': { // l'hôte recale tout le monde sur lui
+    case 'force_sync': {
       const m = room.movie;
       if (room.hostId !== client.id || !m || String(msg.videoId) !== m.videoId) break;
       m.time = Math.max(0, Number(msg.time) || 0);
@@ -363,7 +358,7 @@ function handle(ws, msg) {
       m.updatedAt = now();
       broadcast(room, {
         type: 'resync',
-        movie: { videoId: m.videoId, time: m.time, playing: m.playing },
+        movie: { videoId: m.videoId, url: m.url, time: m.time, playing: m.playing },
         by: { id: client.id, name: client.name }
       }, client.id);
       addChat(room, { system: true, text: client.name + ' a synchronisé tout le monde à ' + fmt(m.time) });
@@ -375,7 +370,6 @@ function handle(ws, msg) {
   }
 }
 
-// ---------------------------------------------------------------- connexions
 wss.on('connection', (ws) => {
   ws.isAlive = true;
   ws.ctx = null;
@@ -384,19 +378,18 @@ wss.on('connection', (ws) => {
     let msg;
     try { msg = JSON.parse(raw.toString()); } catch (e) { return; }
     if (!msg || typeof msg.type !== 'string') return;
-    try { handle(ws, msg); } catch (e) { console.error('handler error', e); }
+    try { handle(ws, msg); } catch (e) {}
   });
   ws.on('close', () => onClose(ws));
   ws.on('error', () => {});
 });
 
-// Détection des connexions mortes
 setInterval(() => {
   wss.clients.forEach((ws) => {
     if (!ws.isAlive) return ws.terminate();
     ws.isAlive = false;
-    try { ws.ping(); } catch (e) { /* ignore */ }
+    try { ws.ping(); } catch (e) {}
   });
 }, 30000);
 
-server.listen(PORT, () => console.log('WatchParty server en écoute sur le port ' + PORT));
+server.listen(PORT, () => console.log('WatchParty v1.3 server en écoute sur le port ' + PORT));
