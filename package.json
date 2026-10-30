@@ -1,7 +1,7 @@
 {
   "name": "watchparty-server",
-  "version": "1.2.0",
-  "description": "Serveur WebSocket WatchParty v1.2 (salons, chat, synchronisation Netflix)",
+  "version": "1.3.0",
+  "description": "Serveur WebSocket WatchParty v1.3 (salons, chat, synchronisation multi-plateforme)",
   "main": "server.js",
   "scripts": {
     "start": "node server.js"
